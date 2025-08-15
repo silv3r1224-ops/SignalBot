@@ -1,13 +1,9 @@
-from sqlalchemy import Column, Integer, String, DateTime
-from sqlalchemy.orm import declarative_base
-import datetime
+from sqlalchemy import Column, Integer, String
+from db import Base
 
-Base = declarative_base()
-
-class Subscriber(Base):
-    __tablename__ = "subscribers"
+class User(Base):
+    __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, unique=True, index=True)
-    plan = Column(String, default="bronze")
-    expiry = Column(DateTime, default=datetime.datetime.utcnow)
+    telegram_id = Column(String, unique=True, index=True)
+    plan = Column(String, default=None)
