@@ -1,6 +1,5 @@
-import os
+# Replace with your Telegram bot token
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
-RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
+# Replace with your Telegram user ID to use /broadcast
+ADMIN_ID = 123456789
