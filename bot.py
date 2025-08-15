@@ -8,8 +8,9 @@ from models import User, Payment
 import config
 from flask import Flask, request, jsonify
 import json
-from threading import Thread
 import razorpay
+import asyncio
+from multiprocessing import Process
 
 # Database
 Base.metadata.create_all(bind=engine)
@@ -62,7 +63,6 @@ def razorpay_webhook():
     signature = request.headers.get("X-Razorpay-Signature")
     secret = config.RAZORPAY_WEBHOOK_SECRET
 
-    # Verify webhook signature
     try:
         razorpay_client.utility.verify_webhook_signature(payload, signature, secret)
     except:
@@ -95,16 +95,23 @@ def razorpay_webhook():
         # Notify user on Telegram
         if status == "captured":
             try:
-                Thread(target=lambda: app_bot.bot.send_message(
+                asyncio.run(app_bot.bot.send_message(
                     chat_id=int(telegram_id),
                     text=f"✅ Payment of ₹{amount} for {plan} plan successful! You are now subscribed."
-                )).start()
+                ))
             except:
                 pass
 
     return jsonify({"status": "success"}), 200
 
-# Run both Telegram bot and Flask webhook
-if __name__ == "__main__":
-    Thread(target=lambda: app_bot.run_polling()).start()
+# Functions to run separately
+def run_flask():
     flask_app.run(host="0.0.0.0", port=5000)
+
+def run_telegram():
+    asyncio.run(app_bot.run_polling())
+
+if __name__ == "__main__":
+    # Run both as separate processes
+    Process(target=run_flask).start()
+    run_telegram()  # Telegram runs in main process with proper event loop
