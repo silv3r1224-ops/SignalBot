@@ -1,4 +1,0 @@
-pyTelegramBotAPI
-schedule
-razorpay
-flask
