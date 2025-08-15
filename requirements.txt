@@ -1,11 +1,6 @@
-# Core packages
+setuptools>=68.0.0
 Flask==2.3.2
-SQLAlchemy==2.0.15
+SQLAlchemy==1.4.51
 python-telegram-bot==20.3
 razorpay==1.4.2
-
-# HTTP requests
 httpx==0.24.1
-
-# Packaging / compatibility
-setuptools<81  # fixes pkg_resources deprecation warning
