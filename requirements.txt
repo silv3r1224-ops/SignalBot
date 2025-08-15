@@ -1,4 +1,6 @@
-python-telegram-bot==21.6
-SQLAlchemy==2.0.32
-razorpay==1.4.2
-python-dateutil==2.9.0.post0
+setuptools
+wheel
+python-telegram-bot==20.0
+razorpay
+sqlalchemy
+psycopg2-binary
