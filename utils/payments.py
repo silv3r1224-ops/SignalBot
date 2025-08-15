@@ -1,28 +1,33 @@
+# utils/payments.py
 import razorpay
 import config
 
 client = razorpay.Client(auth=(config.RAZORPAY_KEY_ID, config.RAZORPAY_KEY_SECRET))
 
-def create_payment_link(plan_name, user_email=None, user_phone=None):
-    amount = config.PLANS.get(plan_name.lower())
-    if not amount:
-        return None
+PLANS = {
+    "Basic": 100,
+    "Standard": 200,
+    "Premium": 500
+}
 
-    data = {
+def create_payment_link(plan_name, telegram_user):
+    amount = PLANS[plan_name] * 100  # paise
+    payment_link = client.payment_link.create({
         "amount": amount,
         "currency": "INR",
-        "accept_partial": False,  # set True if you want partial payment
-        "description": f"{plan_name.capitalize()} Plan Subscription",
+        "description": f"{plan_name} plan subscription",
+        "notes": {
+            "telegram_id": str(telegram_user.id),
+            "plan": plan_name
+        },
         "customer": {
-            "email": user_email or "example@example.com",
-            "contact": user_phone or "9999999999"
+            "name": telegram_user.full_name,
         },
         "notify": {
             "sms": True,
-            "email": True
+            "email": False
         },
-        "reminder_enable": True
-    }
-
-    response = client.payment_link.create(data)
-    return response.get("short_url")
+        "callback_url": "https://signalbot-tfnb.onrender.com/razorpay-webhook",
+        "callback_method": "get"
+    })
+    return payment_link['short_url']
