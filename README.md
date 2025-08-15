@@ -1,10 +1,18 @@
 # SignalBot
 
-Advanced Telegram Signal Bot
+Advanced Telegram Signal Bot with subscription plans and Razorpay integration.
 
-## Setup
+---
 
-1. Create a virtual environment
-2. Install dependencies: `pip install -r requirements.txt`
-3. Set environment variables: BOT_TOKEN, ADMIN_ID, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
-4. Run: `python bot.py`
+## Features
+
+- Telegram bot for sending trading signals.
+- Subscription plans: Basic, Standard, Premium.
+- Razorpay payment integration with webhook support.
+- Admin broadcast feature.
+- PostgreSQL/SQLite database support via SQLAlchemy.
+
+---
+
+## Project Structure
+
