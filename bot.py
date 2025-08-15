@@ -27,9 +27,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome! " + plans_text())
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = []
-    for plan, amount in PLANS.items():
-        keyboard.append([InlineKeyboardButton(f"{plan} - ₹{amount}", callback_data=f"pay_{plan}")])
+    keyboard = [[InlineKeyboardButton(f"{plan} - ₹{amount}", callback_data=f"pay_{plan}")] for plan, amount in PLANS.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Select a plan to pay:", reply_markup=reply_markup)
 
@@ -112,6 +110,5 @@ def run_telegram():
     asyncio.run(app_bot.run_polling())
 
 if __name__ == "__main__":
-    # Run both as separate processes
     Process(target=run_flask).start()
-    run_telegram()  # Telegram runs in main process with proper event loop
+    run_telegram()
