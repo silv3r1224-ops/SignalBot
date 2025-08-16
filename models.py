@@ -1,17 +1,24 @@
-from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
+from db import Base
 
-# create db object (without binding to app yet)
-db = SQLAlchemy()
+class User(Base):
+    __tablename__ = "users"
 
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    chat_id = db.Column(db.String(50), unique=True, nullable=False)
-    username = db.Column(db.String(100))
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(String, unique=True, index=True, nullable=False)
+    subscribed = Column(Boolean, default=False)
+    plan = Column(String, nullable=True)
 
-class Payment(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-    status = db.Column(db.String(20), nullable=False)
+    payments = relationship("Payment", back_populates="user")
 
-    user = db.relationship('User', backref=db.backref('payments', lazy=True))
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    razorpay_payment_id = Column(String, index=True)
+    amount = Column(Float, nullable=False)
+    status = Column(String, nullable=False)
+
+    user = relationship("User", back_populates="payments")
