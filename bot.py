@@ -1,6 +1,5 @@
 import logging
 import threading
-import asyncio
 from flask import Flask, request, jsonify
 import razorpay
 from telegram.ext import Application, CommandHandler
@@ -19,19 +18,6 @@ razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 # Telegram bot command
 async def start(update, context):
     await update.message.reply_text("Welcome! Bot is working ✅")
-
-def run_bot():
-    """Run the Telegram bot in a separate thread with its own asyncio loop."""
-    Base.metadata.create_all(bind=engine)
-
-    bot_app = Application.builder().token(BOT_TOKEN).build()
-    bot_app.add_handler(CommandHandler("start", start))
-
-    # Create new event loop for this thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    bot_app.run_polling()
 
 # Razorpay order
 @app.route("/create_order", methods=["POST"])
@@ -79,9 +65,18 @@ def webhook():
 def home():
     return "Flask server alive ✅ and Bot running 🚀"
 
-if __name__ == "__main__":
-    # Run Telegram bot in separate thread
-    threading.Thread(target=run_bot, daemon=True).start()
-
-    # Run Flask app (main thread)
+def run_flask():
+    """Run Flask in a background thread."""
     app.run(host="0.0.0.0", port=5000)
+
+if __name__ == "__main__":
+    # Init DB
+    Base.metadata.create_all(bind=engine)
+
+    # Start Flask in a background thread
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    # Run Telegram bot in main thread (so signals work properly)
+    bot_app = Application.builder().token(BOT_TOKEN).build()
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.run_polling()
