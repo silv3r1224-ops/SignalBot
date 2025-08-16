@@ -12,6 +12,7 @@ from db import SessionLocal, engine, Base
 from models import User, Payment
 import config
 import razorpay
+import os
 
 # ---------------- Database ----------------
 Base.metadata.create_all(bind=engine)
@@ -110,5 +111,17 @@ def telegram_webhook():
 
 # ---------------- Run App ----------------
 if __name__ == "__main__":
+    # Primary Render URL (set this in Render ENV variables if needed)
+    RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
+
+    async def set_webhook():
+        # Remove old webhook
+        await app_bot.bot.delete_webhook()
+        # Set new webhook
+        await app_bot.bot.set_webhook(f"{RENDER_URL}/telegram-webhook")
+
+    # Start webhook setup in background
+    asyncio.get_event_loop().run_until_complete(set_webhook())
+
     # Start Flask app (Telegram webhook + Razorpay)
     flask_app.run(host="0.0.0.0", port=5000)
