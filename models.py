@@ -6,8 +6,8 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(String, unique=True, index=True)
-    plan = Column(String, default="")
     subscribed = Column(Boolean, default=False)
+    plan = Column(String, default="")
 
 class Payment(Base):
     __tablename__ = "payments"
