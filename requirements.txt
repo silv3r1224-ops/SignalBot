@@ -1,8 +1,9 @@
 Flask==3.0.3
-gunicorn==21.2.0
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==1.4.51
 python-telegram-bot==20.6
 razorpay==1.4.2
-SQLAlchemy==1.4.51
+gunicorn==21.2.0
 requests==2.32.4
 httpx==0.25.2
-setuptools>=68.0.0   # ✅ fixes pkg_resources error
+setuptools<81
