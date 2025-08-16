@@ -1,7 +1,5 @@
-setuptools>=68.0.0
+Flask==2.3.3
 python-telegram-bot==20.3
-Flask==2.3.2
+razorpay==1.4.1
 SQLAlchemy==1.4.51
-razorpay==1.4.2
-httpx==0.24.1
-gunicorn==21.2.0
+psycopg2-binary==2.9.9
