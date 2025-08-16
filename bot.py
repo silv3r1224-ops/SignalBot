@@ -1,128 +1,87 @@
-# bot.py
-import asyncio
-import json
+import logging
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
-from threading import Thread
-
-from utils.text import plans_text
-from utils.payments import create_payment_link, PLANS
-from db import SessionLocal, engine, Base
-from models import User, Payment
-import config
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import sessionmaker, declarative_base
 import razorpay
-import os
+import hmac, hashlib
+import config
 
-# ---------------- Database ----------------
-Base.metadata.create_all(bind=engine)
-db = SessionLocal()
+# Logging
+logging.basicConfig(level=logging.INFO)
 
-# ---------------- Telegram Bot ----------------
-app_bot = ApplicationBuilder().token(config.BOT_TOKEN).build()
+# Flask app
+app = Flask(__name__)
 
-# ---------------- Razorpay ----------------
+# Telegram bot
+application = Application.builder().token(config.BOT_TOKEN).build()
+
+# SQLAlchemy setup
+engine = create_engine(config.DATABASE_URL, connect_args={"check_same_thread": False})
+Session = sessionmaker(bind=engine)
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    tg_id = Column(String, unique=True)
+    name = Column(String)
+
+Base.metadata.create_all(engine)
+
+# Razorpay client
 razorpay_client = razorpay.Client(auth=(config.RAZORPAY_KEY_ID, config.RAZORPAY_KEY_SECRET))
 
-# ---------------- Bot Commands ----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome! " + plans_text())
+# --- Telegram Handlers ---
+async def start(update: Update, context):
+    session = Session()
+    tg_id = str(update.effective_user.id)
+    user = session.query(User).filter_by(tg_id=tg_id).first()
+    if not user:
+        user = User(tg_id=tg_id, name=update.effective_user.full_name)
+        session.add(user)
+        session.commit()
+    await update.message.reply_text("Welcome! You’re registered ✅")
+    session.close()
 
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(f"{plan} - ₹{amount}", callback_data=f"pay_{plan}")]
-                for plan, amount in PLANS.items()]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Select a plan to pay:", reply_markup=reply_markup)
+async def echo(update: Update, context):
+    await update.message.reply_text(f"You said: {update.message.text}")
 
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != config.ADMIN_ID:
-        await update.message.reply_text("You are not authorized!")
-        return
-    message = " ".join(context.args)
-    await update.message.reply_text(f"Broadcasting: {message}")
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-# ---------------- Button Callback ----------------
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    plan_name = query.data.replace("pay_", "")
-    link = create_payment_link(plan_name, query.from_user)
-    await query.edit_message_text(f"Click this link to pay for {plan_name}: {link}")
+# --- Flask Routes ---
+@app.route("/telegram-webhook", methods=["POST"])
+def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return "ok", 200
 
-# ---------------- Add Handlers ----------------
-app_bot.add_handler(CommandHandler("start", start))
-app_bot.add_handler(CommandHandler("subscribe", subscribe))
-app_bot.add_handler(CommandHandler("broadcast", broadcast))
-app_bot.add_handler(CallbackQueryHandler(button))
-
-# ---------------- Flask App ----------------
-flask_app = Flask(__name__)
-
-@flask_app.route("/razorpay-webhook", methods=["POST"])
+@app.route("/razorpay-webhook", methods=["POST"])
 def razorpay_webhook():
     payload = request.data
     signature = request.headers.get("X-Razorpay-Signature")
-    secret = config.RAZORPAY_WEBHOOK_SECRET
+    expected_signature = hmac.new(
+        config.RAZORPAY_WEBHOOK_SECRET.encode(),
+        payload,
+        hashlib.sha256
+    ).hexdigest()
 
-    try:
-        razorpay_client.utility.verify_webhook_signature(payload, signature, secret)
-    except:
-        return jsonify({"status": "invalid signature"}), 400
+    if not hmac.compare_digest(expected_signature, signature):
+        return "Invalid signature", 400
 
-    data = json.loads(payload)
-    payment_entity = data["payload"]["payment"]["entity"]
-    payment_id = payment_entity["id"]
-    amount = payment_entity["amount"] / 100
-    status = payment_entity["status"]
-    telegram_id = payment_entity["notes"].get("telegram_id")
-    plan = payment_entity["notes"].get("plan", "")
-
-    if telegram_id:
-        user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
-        if not user:
-            user = User(telegram_id=str(telegram_id))
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        user.subscribed = status == "captured"
-        user.plan = plan
-        db.add(user)
-        db.commit()
-
-        payment = Payment(user_id=user.id, razorpay_payment_id=payment_id, amount=amount, status=status)
-        db.add(payment)
-        db.commit()
-
-        # Notify user on Telegram
-        if status == "captured":
-            asyncio.create_task(app_bot.bot.send_message(
-                chat_id=int(telegram_id),
-                text=f"✅ Payment of ₹{amount} for {plan} plan successful! You are now subscribed."
-            ))
-
+    data = request.json
+    logging.info(f"Razorpay event: {data}")
     return jsonify({"status": "success"}), 200
 
-# ---------------- Telegram Webhook Endpoint ----------------
-@app.route(f"/telegram-webhook", methods=["POST"])
-async def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), app_bot)
-    await app_bot.update_queue.put(update)
-    return "ok"
-
-
-# ---------------- Run App ----------------
+# --- Startup ---
 if __name__ == "__main__":
-    # Primary Render URL (set this in Render ENV variables if needed)
-    RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
-
-    async def set_webhook():
-        # Remove old webhook
-        await app_bot.bot.delete_webhook()
-        # Set new webhook
-        await app_bot.bot.set_webhook(f"{RENDER_URL}/telegram-webhook")
-
-    # Start webhook setup in background
-    asyncio.get_event_loop().run_until_complete(set_webhook())
-
-    # Start Flask app (Telegram webhook + Razorpay)
-    flask_app.run(host="0.0.0.0", port=5000)
+    webhook_url = f"{config.PUBLIC_URL}/telegram-webhook"
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=10000,
+        url_path="telegram-webhook",
+        webhook_url=webhook_url
+    )
+    app.run(host="0.0.0.0", port=5000)
