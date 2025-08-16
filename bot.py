@@ -9,14 +9,9 @@ from hypercorn.config import Config
 # --------------------------
 # Logging setup
 # --------------------------
-LOG_FILE = "bot.log"
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -45,7 +40,6 @@ def razorpay_webhook():
 # --------------------------
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
-    logger.error("TELEGRAM_TOKEN environment variable not set!")
     raise RuntimeError("TELEGRAM_TOKEN environment variable not set!")
 
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -65,35 +59,24 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 # Main async function
 # --------------------------
 async def main():
-    bot_task = asyncio.create_task(
-        telegram_app.run_polling(close_loop=False)
-    )
+    await telegram_app.initialize()
+    await telegram_app.start()
+    logger.info("Telegram bot started")
+    
+    # Run Flask using Hypercorn
     port = int(os.environ.get("PORT", 5000))
     config = Config()
     config.bind = [f"0.0.0.0:{port}"]
-    flask_task = asyncio.create_task(serve(app, config))
+    await serve(app, config)
 
-    logger.info("Telegram bot and Flask server started...")
-    await asyncio.gather(bot_task, flask_task)
+    # Gracefully stop Telegram bot if Flask stops
+    await telegram_app.stop()
+    await telegram_app.shutdown()
 
 # --------------------------
-# Run everything safely
+# Start safely in existing loop
 # --------------------------
 if __name__ == "__main__":
-    try:
-        logger.info("Starting Bot & Flask server...")
-        try:
-            # Check if an event loop is already running (Render-friendly)
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            # Use existing loop
-            asyncio.create_task(main())
-        else:
-            # Safe to create new loop
-            asyncio.run(main())
-
-    except Exception as e:
-        logger.exception(f"Fatal error: {e}")
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    loop.run_forever()
