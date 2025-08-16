@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import threading
 from flask import Flask, request, jsonify
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
@@ -46,8 +47,6 @@ if not TELEGRAM_TOKEN:
     logger.error("TELEGRAM_TOKEN environment variable not set!")
     raise RuntimeError("TELEGRAM_TOKEN environment variable not set!")
 
-telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
 async def start(update, context):
     await update.message.reply_text("Hello! Bot is running ✅")
     logger.info(f"/start used by {update.effective_user.username}")
@@ -56,27 +55,36 @@ async def echo(update, context):
     await update.message.reply_text(f"You said: {update.message.text}")
     logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
 
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+# --------------------------
+# Function to run Telegram bot with auto-restart
+# --------------------------
+async def run_telegram_bot():
+    while True:
+        try:
+            telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+            telegram_app.add_handler(CommandHandler("start", start))
+            telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+
+            logger.info("Telegram bot starting...")
+            await telegram_app.run_polling()
+        except Exception as e:
+            logger.error(f"Bot crashed: {e}. Restarting in 5 seconds...")
+            await asyncio.sleep(5)
 
 # --------------------------
-# Run both Telegram and Flask together
+# Run Flask in a separate thread
 # --------------------------
-async def main():
-    # Start Telegram polling in the background
-    asyncio.create_task(telegram_app.run_polling(close_loop=False))
-
-    # Start Flask asynchronously with Hypercorn
-    from hypercorn.asyncio import serve
-    from hypercorn.config import Config
-
-    config = Config()
-    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 5000)}"]
-    await serve(app, config)
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 # --------------------------
-# Start event loop manually (Render-friendly)
+# Entry point
 # --------------------------
-loop = asyncio.get_event_loop()
-logger.info("Bot and Flask server starting...")
-loop.run_until_complete(main())
+if __name__ == "__main__":
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    logger.info("Flask server started in a separate thread")
+
+    # Run Telegram bot
+    asyncio.run(run_telegram_bot())
