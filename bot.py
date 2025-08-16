@@ -33,7 +33,6 @@ def razorpay_webhook():
     try:
         data = request.json
         logger.info(f"Webhook received: {data}")
-        # Add Razorpay signature verification if needed
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -49,7 +48,6 @@ if not TELEGRAM_TOKEN:
 
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# Command handlers
 async def start(update, context):
     try:
         await update.message.reply_text("Hello! Bot is running ✅")
@@ -68,36 +66,24 @@ telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
-# Safe Telegram polling
-# --------------------------
-async def run_telegram():
-    while True:
-        try:
-            logger.info("Starting Telegram polling...")
-            await telegram_app.run_polling()
-        except Exception as e:
-            logger.error(f"Telegram polling crashed: {e}")
-            logger.info("Restarting Telegram polling in 5s...")
-            await asyncio.sleep(5)
-
-# --------------------------
 # Main function to run bot + Flask
 # --------------------------
-def main():
-    # Create a new event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    # Start Telegram polling in background
-    loop.create_task(run_telegram())
-    # Start Flask server in same process
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting Flask server on port {port}")
-    # Use asyncio.to_thread to run blocking Flask in the async loop
-    asyncio.to_thread(app.run, "0.0.0.0", port)
+async def main():
+    # Start Telegram polling
+    telegram_task = asyncio.create_task(telegram_app.run_polling())
 
-    # Keep loop running forever
-    loop.run_forever()
+    # Start Flask using Hypercorn (async-friendly)
+    import hypercorn.asyncio
+    from hypercorn.config import Config
+
+    config = Config()
+    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 5000)}"]
+
+    await hypercorn.asyncio.serve(app, config)
+
+    # Wait for telegram to finish (never)
+    await telegram_task
 
 if __name__ == "__main__":
     logger.info("Bot and Flask server starting...")
-    main()
+    asyncio.run(main())
