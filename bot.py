@@ -1,86 +1,100 @@
-import os
-import asyncio
-import logging
-from flask import Flask, request, jsonify, render_template
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+from utils.text import plans_text
+from utils.payments import create_payment_link, PLANS, razorpay_client
+from db import SessionLocal, engine, Base
+from models import User, Payment
+import config
+from flask import Flask, request, jsonify
+import json
 from threading import Thread
-import razorpay
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from models import db, User, Payment
-from config import Config
 
-# Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# --- Database ---
+Base.metadata.create_all(bind=engine)
+db = SessionLocal()
 
-# Flask app
-app = Flask(__name__)
-app.config.from_object(Config)
-db.init_app(app)
+# --- Telegram bot ---
+app_bot = ApplicationBuilder().token(config.BOT_TOKEN).build()
 
-with app.app_context():
-    db.create_all()
-
-# Razorpay client
-razorpay_client = razorpay.Client(auth=(Config.RAZORPAY_KEY_ID, Config.RAZORPAY_KEY_SECRET))
-
-# Telegram Bot
-app_bot = Application.builder().token(Config.BOT_TOKEN).build()
-
-# ---------- BOT HANDLERS ----------
-
+# --- Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Signal Bot 🚀\nUse /subscribe to get premium access.")
+    await update.message.reply_text("Welcome! " + plans_text())
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+    keyboard = [
+        [InlineKeyboardButton(f"{plan} - ₹{amount}", callback_data=f"pay_{plan}")]
+        for plan, amount in PLANS.items()
+    ]
+    await update.message.reply_text("Select a plan:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    order = razorpay_client.order.create({
-        "amount": 10000,  # ₹100
-        "currency": "INR",
-        "payment_capture": "1"
-    })
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != config.ADMIN_ID:
+        await update.message.reply_text("Unauthorized ❌")
+        return
+    msg = " ".join(context.args)
+    await update.message.reply_text(f"Broadcasting: {msg}")
 
-    payment_url = f"https://rzp.io/i/{order['id']}"
-    await update.message.reply_text(f"Click here to pay: {payment_url}")
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan = query.data.replace("pay_", "")
+    link = create_payment_link(plan, query.from_user)
+    await query.edit_message_text(f"Click to pay for {plan}: {link}")
 
+# Handlers
 app_bot.add_handler(CommandHandler("start", start))
 app_bot.add_handler(CommandHandler("subscribe", subscribe))
+app_bot.add_handler(CommandHandler("broadcast", broadcast))
+app_bot.add_handler(CallbackQueryHandler(button))
 
-# ---------- FLASK ROUTES ----------
+# --- Flask for Razorpay webhook ---
+flask_app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Signal Bot is Live 🚀"
-
-@app.route("/success")
-def success():
-    return render_template("success.html")
-
-@app.route("/cancel")
-def cancel():
-    return render_template("cancel.html")
-
-@app.route("/razorpay-webhook", methods=["POST"])
+@flask_app.route("/razorpay-webhook", methods=["POST"])
 def razorpay_webhook():
-    data = request.json
-    logger.info(f"Webhook data: {data}")
-    return jsonify({"status": "ok"})
+    payload = request.data
+    signature = request.headers.get("X-Razorpay-Signature")
 
-@app.route("/telegram-webhook", methods=["POST"])
-def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), app_bot.bot)
-    asyncio.run(app_bot.process_update(update))
-    return "ok"
+    try:
+        razorpay_client.utility.verify_webhook_signature(payload, signature, config.RAZORPAY_WEBHOOK_SECRET)
+    except:
+        return jsonify({"status": "invalid signature"}), 400
 
-# ---------- RUN ----------
+    data = json.loads(payload)
+    entity = data["payload"]["payment"]["entity"]
 
-def run_flask():
-    app.run(host="0.0.0.0", port=5000)
+    payment_id = entity["id"]
+    amount = entity["amount"] / 100
+    status = entity["status"]
+    telegram_id = entity["notes"].get("telegram_id")
+    plan = entity["notes"].get("plan", "")
 
-def run_bot():
-    asyncio.run(app_bot.run_polling())
+    if telegram_id:
+        user = db.query(User).filter_by(telegram_id=str(telegram_id)).first()
+        if not user:
+            user = User(telegram_id=str(telegram_id))
+            db.add(user)
+            db.commit()
+            db.refresh(user)
 
+        user.subscribed = (status == "captured")
+        user.plan = plan
+        db.commit()
+
+        payment = Payment(user_id=user.id, razorpay_payment_id=payment_id, amount=amount, status=status)
+        db.add(payment)
+        db.commit()
+
+        # Notify via Telegram
+        if status == "captured":
+            try:
+                app_bot.bot.send_message(chat_id=int(telegram_id), text=f"✅ Payment ₹{amount} for {plan} successful!")
+            except:
+                pass
+
+    return jsonify({"status": "ok"}), 200
+
+# --- Run both ---
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    Thread(target=run_bot).start()
+    Thread(target=lambda: app_bot.run_polling()).start()
+    flask_app.run(host="0.0.0.0", port=5000)
