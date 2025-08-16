@@ -1,82 +1,102 @@
-import logging
-import threading
-from flask import Flask, request, jsonify
+import os
+from flask import Flask, request
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import razorpay
-from telegram.ext import Application, CommandHandler
-from config import BOT_TOKEN, ADMIN_ID, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
-from db import Base, engine, SessionLocal
+import hmac
+import hashlib
+from db import SessionLocal
 from models import Payment
 
-logging.basicConfig(level=logging.INFO)
+# Load environment variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 
-# Flask app
+# Initialize Flask app
 app = Flask(__name__)
 
-# Razorpay client
+# Initialize Razorpay client
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-# Telegram bot command
-async def start(update, context):
-    await update.message.reply_text("Welcome! Bot is working ✅")
+# Initialize Telegram bot application
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Razorpay order
-@app.route("/create_order", methods=["POST"])
-def create_order():
-    data = request.json
-    amount = int(data.get("amount", 100)) * 100  # INR -> paise
-    order = razorpay_client.order.create({
-        "amount": amount,
-        "currency": "INR",
-        "receipt": "receipt#1",
-        "payment_capture": 1
-    })
+# --- Telegram command handlers ---
 
-    db = SessionLocal()
-    new_payment = Payment(
-        user_id=data.get("user_id", "unknown"),
-        amount=amount / 100,
-        order_id=order["id"],
-        status="created"
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Welcome! Use /pay <amount> to make a payment.\nExample: /pay 100"
     )
-    db.add(new_payment)
+
+async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.message.reply_text("Please provide a valid amount. Example: /pay 100")
+        return
+
+    amount = int(context.args[0]) * 100  # Razorpay uses paise
+    user_id = update.effective_chat.id
+
+    # Create Razorpay order
+    order = razorpay_client.order.create(dict(amount=amount, currency="INR", payment_capture="1"))
+
+    # Save order in DB
+    db = SessionLocal()
+    payment = Payment(user_id=user_id, razorpay_order_id=order['id'], amount=amount, status="created")
+    db.add(payment)
     db.commit()
     db.close()
 
-    return jsonify(order)
+    # Send payment link
+    keyboard = [
+        [InlineKeyboardButton("Pay Now", url=f"https://rzp.io/i/{order['id']}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Click below to pay:", reply_markup=reply_markup)
 
-# Razorpay webhook
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("pay", pay))
+
+# --- Flask webhook for Razorpay ---
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
-    order_id = data.get("payload", {}).get("payment", {}).get("entity", {}).get("order_id")
-    status = data.get("event", "")
+    payload = request.get_data()
+    signature = request.headers.get("X-Razorpay-Signature")
 
-    if order_id:
+    # Verify webhook
+    try:
+        hmac.new(
+            bytes(RAZORPAY_KEY_SECRET, 'utf-8'),
+            msg=payload,
+            digestmod=hashlib.sha256
+        ).hexdigest()
+    except Exception as e:
+        return "Signature verification failed", 400
+
+    data = request.json
+    if data.get("event") == "payment.captured":
+        order_id = data["payload"]["payment"]["entity"]["order_id"]
         db = SessionLocal()
-        payment = db.query(Payment).filter(Payment.order_id == order_id).first()
+        payment = db.query(Payment).filter_by(razorpay_order_id=order_id).first()
         if payment:
-            payment.status = status
+            payment.status = "paid"
             db.commit()
+            # Notify user on Telegram
+            telegram_app.bot.send_message(chat_id=payment.user_id, text="✅ Payment successful!")
         db.close()
 
-    return jsonify({"status": "ok"})
+    return "OK", 200
 
-@app.route("/")
-def home():
-    return "Flask server alive ✅ and Bot running 🚀"
+# --- Run both Telegram and Flask ---
 
-def run_flask():
-    """Run Flask in a background thread."""
-    app.run(host="0.0.0.0", port=5000)
+def run_telegram():
+    telegram_app.run_polling()
 
 if __name__ == "__main__":
-    # Init DB
-    Base.metadata.create_all(bind=engine)
-
-    # Start Flask in a background thread
-    threading.Thread(target=run_flask, daemon=True).start()
-
-    # Run Telegram bot in main thread (so signals work properly)
-    bot_app = Application.builder().token(BOT_TOKEN).build()
-    bot_app.add_handler(CommandHandler("start", start))
-    bot_app.run_polling()
+    import threading
+    # Run Telegram bot in separate thread
+    t = threading.Thread(target=run_telegram)
+    t.start()
+    # Run Flask server for webhook
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
