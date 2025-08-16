@@ -1,10 +1,7 @@
-# utils/text.py
-
 def plans_text():
-    return "Available plans:\n- Basic\n- Premium\n- VIP"
-
-PLANS = {
-    "Basic": 100,
-    "Premium": 300,
-    "VIP": 500
-}
+    return (
+        "💎 Subscription Plans:\n"
+        "1. Basic - ₹99\n"
+        "2. Pro - ₹199\n"
+        "3. Premium - ₹499"
+    )
