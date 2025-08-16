@@ -1,4 +1,5 @@
-import logging, asyncio, threading
+import logging
+import asyncio
 from flask import Flask, request, jsonify
 import razorpay
 from telegram.ext import Application, CommandHandler
@@ -8,7 +9,9 @@ from models import Payment
 
 logging.basicConfig(level=logging.INFO)
 
+# =========================
 # Flask app
+# =========================
 app = Flask(__name__)
 
 # Razorpay client
@@ -18,18 +21,16 @@ razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 async def start(update, context):
     await update.message.reply_text("Welcome! Bot is working ✅")
 
-async def run_bot():
+# Build bot
+def build_bot():
     Base.metadata.create_all(bind=engine)
-
     app_bot = Application.builder().token(BOT_TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
+    return app_bot
 
-    await app_bot.run_polling()
-
-def start_bot():
-    asyncio.run(run_bot())
-
-# Razorpay order
+# =========================
+# Razorpay order endpoint
+# =========================
 @app.route("/create_order", methods=["POST"])
 def create_order():
     data = request.json
@@ -54,7 +55,9 @@ def create_order():
 
     return jsonify(order)
 
-# Razorpay webhook
+# =========================
+# Razorpay webhook endpoint
+# =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -75,6 +78,21 @@ def webhook():
 def home():
     return "Flask server alive ✅ and Bot running 🚀"
 
+# =========================
+# Main async runner
+# =========================
+async def main():
+    bot_app = build_bot()
+
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    config = Config()
+    config.bind = ["0.0.0.0:5000"]
+
+    await asyncio.gather(
+        bot_app.run_polling(),   # Telegram bot
+        serve(app, config)       # Flask API with Hypercorn
+    )
+
 if __name__ == "__main__":
-    threading.Thread(target=start_bot).start()
-    app.run(host="0.0.0.0", port=5000)
+    asyncio.run(main())
