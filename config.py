@@ -1,13 +1,9 @@
-# config.py
+# Telegram Bot Token
+TELEGRAM_TOKEN = "8250035384:AAHbSjhqT0fODfQHnjgBFcZLuIQeaUBJeP8"
 
-# Telegram Bot
-BOT_TOKEN = "8250035384:AAHbSjhqT0fODfQHnjgBFcZLuIQeaUBJeP8"
-ADMIN_ID = 7909563220
-
-# Razorpay
+# Razorpay API keys
 RAZORPAY_KEY_ID = "rzp_test_R5a8j8yy3WEssP"
 RAZORPAY_KEY_SECRET = "DNSIjreZrmVcqsP0n6goeAoq"
-RAZORPAY_WEBHOOK_SECRET = "#Tesan25"
 
-# Database (for Render Postgres)
-DATABASE_URL = "sqlite:///signalbot.db"  # change to Postgres URL when deploying
+# Admin Telegram ID
+ADMIN_ID = 7909563220  # Replace with your Telegram user ID
