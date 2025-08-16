@@ -103,11 +103,12 @@ def razorpay_webhook():
     return jsonify({"status": "success"}), 200
 
 # ---------------- Telegram Webhook Endpoint ----------------
-@flask_app.route("/telegram-webhook", methods=["POST"])
-def telegram_webhook():
-    update = Update.de_json(json.loads(request.data), app_bot.bot)
-    asyncio.create_task(app_bot.update_queue.put(update))
-    return "OK"
+@app.route(f"/telegram-webhook", methods=["POST"])
+async def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), app_bot)
+    await app_bot.update_queue.put(update)
+    return "ok"
+
 
 # ---------------- Run App ----------------
 if __name__ == "__main__":
