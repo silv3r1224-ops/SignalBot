@@ -1,30 +1,35 @@
 # bot.py
-
-import os
-import json
-from threading import Thread
-from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
-from utils.text import plans_text
-from utils.payments import create_payment_link, PLANS
+from utils.text import plans_text, PLANS
+from utils.payments import create_payment_link
 from db import SessionLocal, engine, Base
 from models import User, Payment
-import razorpay
 import config
+from flask import Flask, request, jsonify
+import json
+from threading import Thread
+import asyncio
 
-# ------------------- Database Setup -------------------
+import razorpay
+
+# Database
 Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 
-# ------------------- Telegram Bot Setup -------------------
+# Telegram bot
 app_bot = ApplicationBuilder().token(config.BOT_TOKEN).build()
 
+# Razorpay client
+razorpay_client = razorpay.Client(auth=(config.RAZORPAY_KEY_ID, config.RAZORPAY_KEY_SECRET))
+
+# Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome! " + plans_text())
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(f"{plan} - ₹{amount}", callback_data=f"pay_{plan}")] for plan, amount in PLANS.items()]
+    keyboard = [[InlineKeyboardButton(f"{plan} - ₹{amount}", callback_data=f"pay_{plan}")]
+                for plan, amount in PLANS.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Select a plan to pay:", reply_markup=reply_markup)
 
@@ -42,16 +47,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = create_payment_link(plan_name, query.from_user)
     await query.edit_message_text(f"Click this link to pay for {plan_name}: {link}")
 
-# Add handlers
+# Handlers
 app_bot.add_handler(CommandHandler("start", start))
 app_bot.add_handler(CommandHandler("subscribe", subscribe))
 app_bot.add_handler(CommandHandler("broadcast", broadcast))
 app_bot.add_handler(CallbackQueryHandler(button))
 
-# ------------------- Razorpay Setup -------------------
-razorpay_client = razorpay.Client(auth=(config.RAZORPAY_KEY_ID, config.RAZORPAY_KEY_SECRET))
-
-# ------------------- Flask App Setup -------------------
+# Flask webhook
 flask_app = Flask(__name__)
 
 @flask_app.route("/razorpay-webhook", methods=["POST"])
@@ -59,7 +61,6 @@ def razorpay_webhook():
     payload = request.data
     signature = request.headers.get("X-Razorpay-Signature")
     secret = config.RAZORPAY_WEBHOOK_SECRET
-
     try:
         razorpay_client.utility.verify_webhook_signature(payload, signature, secret)
     except:
@@ -89,21 +90,18 @@ def razorpay_webhook():
         db.add(payment)
         db.commit()
 
-        # Notify user on Telegram
         if status == "captured":
             try:
-                Thread(target=lambda: app_bot.bot.send_message(
+                Thread(target=lambda: asyncio.run(app_bot.bot.send_message(
                     chat_id=int(telegram_id),
                     text=f"✅ Payment of ₹{amount} for {plan} plan successful! You are now subscribed."
-                )).start()
+                ))).start()
             except:
                 pass
 
     return jsonify({"status": "success"}), 200
 
-# ------------------- Run Flask App -------------------
+# Run both Telegram bot and Flask webhook
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render requires this
-    # Run Telegram Bot in a separate thread
-    Thread(target=lambda: app_bot.run_polling()).start()
-    flask_app.run(host="0.0.0.0", port=port)
+    Thread(target=lambda: asyncio.run(app_bot.run_polling())).start()
+    flask_app.run(host="0.0.0.0", port=5000)
