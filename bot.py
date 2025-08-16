@@ -1,5 +1,6 @@
 import logging
 import threading
+import asyncio
 from flask import Flask, request, jsonify
 import razorpay
 from telegram.ext import Application, CommandHandler
@@ -20,11 +21,15 @@ async def start(update, context):
     await update.message.reply_text("Welcome! Bot is working ✅")
 
 def run_bot():
-    """Run the Telegram bot in a separate thread."""
+    """Run the Telegram bot in a separate thread with its own asyncio loop."""
     Base.metadata.create_all(bind=engine)
 
     bot_app = Application.builder().token(BOT_TOKEN).build()
     bot_app.add_handler(CommandHandler("start", start))
+
+    # Create new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     bot_app.run_polling()
 
