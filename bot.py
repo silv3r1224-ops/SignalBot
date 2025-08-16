@@ -1,133 +1,104 @@
+import os
+import threading
+import hmac
+import hashlib
 import json
-import asyncio
-from flask import Flask, request
-import hmac, hashlib
+from flask import Flask, request, abort
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import razorpay
-from datetime import datetime, timedelta
-import threading
 
-# ---------------- CONFIG ----------------
-TELEGRAM_TOKEN = "8250035384:AAHbSjhqT0fODfQHnjgBFcZLuIQeaUBJeP8"
-RAZORPAY_KEY_ID = "rzp_test_R5a8j8yy3WEssP"
-RAZORPAY_KEY_SECRET = "DNSIjreZrmVcqsP0n6goeAoq"
-ADMIN_ID = 7909563220  # Replace with your Telegram ID
+# Load environment variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
-SUBSCRIBERS_FILE = "subscribers.json"
-PLANS_FILE = "plans.json"
-# ----------------------------------------
+# Initialize Razorpay client
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-# Load subscribers
-try:
-    with open(SUBSCRIBERS_FILE, "r") as f:
-        subscribers = json.load(f)
-except FileNotFoundError:
-    subscribers = {}
-
-def save_subscribers():
-    with open(SUBSCRIBERS_FILE, "w") as f:
-        json.dump(subscribers, f)
-
-# Load subscription plans
-try:
-    with open(PLANS_FILE, "r") as f:
-        plans = json.load(f)
-except FileNotFoundError:
-    plans = {
-        "basic": {"price": 10000, "duration_days": 7},  # ₹100, 7 days
-        "premium": {"price": 25000, "duration_days": 30} # ₹250, 30 days
-    }
-    with open(PLANS_FILE, "w") as f:
-        json.dump(plans, f)
-
-# Razorpay client
-client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-
-# Flask app for webhook
+# Initialize Flask
 app = Flask(__name__)
 
+# Keep track of active subscribers
+subscribers = set()
+
+# Telegram Bot
+telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+# Function to create Razorpay payment link for a user
+def create_payment_link(user_id):
+    order_data = {
+        "amount": 10000,  # ₹100
+        "currency": "INR",
+        "receipt": f"user_{user_id}",
+        "payment_capture": 1,
+        "notes": {"telegram_id": str(user_id)}
+    }
+    order = razorpay_client.order.create(data=order_data)
+    payment_link = f"https://checkout.razorpay.com/v1/checkout.js?order_id={order['id']}"
+    return payment_link
+
+# Telegram command: start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in subscribers:
+        await update.message.reply_text("✅ You are subscribed! You will receive trading signals.")
+    else:
+        payment_link = create_payment_link(user_id)
+        await update.message.reply_text(
+            f"💰 You are not subscribed yet. Please pay to get access.\n"
+            f"Use this link to pay: {payment_link}"
+        )
+
+telegram_app.add_handler(CommandHandler("start", start))
+
+# Run Telegram in separate thread
+def run_telegram():
+    telegram_app.run_polling()
+
+# Razorpay webhook endpoint
 @app.route("/razorpay_webhook", methods=["POST"])
 def razorpay_webhook():
     payload = request.data
     signature = request.headers.get("X-Razorpay-Signature")
-    secret = RAZORPAY_KEY_SECRET.encode()
-    generated_signature = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    
+    # Verify webhook
+    if not signature or not hmac.new(
+        bytes(RAZORPAY_WEBHOOK_SECRET, 'utf-8'),
+        msg=payload,
+        digestmod=hashlib.sha256
+    ).hexdigest() == signature:
+        abort(400, "Invalid signature")
+    
+    data = json.loads(payload)
+    event = data.get("event")
+    
+    if event == "payment.captured":
+        payment_entity = data["payload"]["payment"]["entity"]
+        notes = payment_entity.get("notes", {})
+        telegram_user_id = int(notes.get("telegram_id", 0))
+        
+        if telegram_user_id:
+            subscribers.add(telegram_user_id)
+            # Notify user
+            telegram_app.bot.send_message(
+                chat_id=telegram_user_id,
+                text="🎉 Payment received! You are now subscribed to trading signals."
+            )
+            # Notify admin
+            telegram_app.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"User {telegram_user_id} just subscribed."
+            )
+    
+    return {"status": "ok"}
 
-    if hmac.compare_digest(signature, generated_signature):
-        data = request.json
-        if data.get("event") == "payment.captured":
-            user_id = str(data["payload"]["payment"]["entity"]["notes"]["telegram_id"])
-            plan = data["payload"]["payment"]["entity"]["notes"].get("plan", "basic")
-            duration = plans.get(plan, plans["basic"])["duration_days"]
-            expiry = datetime.now() + timedelta(days=duration)
-            subscribers[user_id] = expiry.strftime("%Y-%m-%d %H:%M:%S")
-            save_subscribers()
-            asyncio.run(send_welcome(user_id, plan))
-        return "", 200
-    return "Invalid signature", 400
+# Run Flask
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
 
-async def send_welcome(user_id, plan):
-    await telegram_app.bot.send_message(
-        chat_id=int(user_id),
-        text=f"✅ Payment received! You are subscribed to {plan} plan until {subscribers[user_id]}"
-    )
-
-# ---------------- TELEGRAM BOT ----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Welcome! To subscribe to trading signals, use /subscribe <plan>\nAvailable plans: basic, premium"
-    )
-
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-    if len(context.args) < 1 or context.args[0] not in plans:
-        await update.message.reply_text("❌ Invalid plan. Available: basic, premium")
-        return
-
-    plan = context.args[0]
-    amount = plans[plan]["price"]
-    payment = client.order.create({
-        "amount": amount,
-        "currency": "INR",
-        "payment_capture": "1",
-        "notes": {"telegram_id": user_id, "plan": plan}
-    })
-    payment_url = f"https://checkout.razorpay.com/v1/checkout.js?order_id={payment['id']}"
-    await update.message.reply_text(
-        f"Click the link to pay ₹{amount/100:.2f} for {plan} plan: {payment_url}"
-    )
-
-async def send_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized.")
-        return
-    message = " ".join(context.args)
-    now = datetime.now()
-    expired_users = []
-    for user_id, expiry_str in subscribers.items():
-        expiry = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
-        if expiry >= now:
-            await context.bot.send_message(chat_id=int(user_id), text=f"📈 Signal: {message}")
-        else:
-            expired_users.append(user_id)
-    # Remove expired users
-    for u in expired_users:
-        subscribers.pop(u)
-    save_subscribers()
-    await update.message.reply_text("✅ Signal sent to active subscribers!")
-
-# ---------------- RUN TELEGRAM ----------------
-telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("subscribe", subscribe))
-telegram_app.add_handler(CommandHandler("send", send_signal))
-
-def run_telegram():
-    telegram_app.run_polling()
-
-threading.Thread(target=run_telegram).start()
-
-# ---------------- RUN FLASK ----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    threading.Thread(target=run_flask).start()
+    threading.Thread(target=run_telegram).start()
