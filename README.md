@@ -1,10 +1,7 @@
-# SignalBot
-
-Advanced Telegram Signal Bot with Razorpay integration
+# Trading Signals Telegram Bot
 
 ## Setup
 
-1. Create a virtual environment  
-2. Install dependencies: `pip install -r requirements.txt`  
-3. Run locally: `python bot.py`  
-4. Deploy on Render with a web service  
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
