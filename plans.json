@@ -1,4 +1,0 @@
-{
-    "basic": {"price": 10000, "duration_days": 7},
-    "premium": {"price": 25000, "duration_days": 30}
-}
