@@ -65,28 +65,35 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 # Main async function
 # --------------------------
 async def main():
-    # Start Telegram bot polling in background
     bot_task = asyncio.create_task(
         telegram_app.run_polling(close_loop=False)
     )
-    logger.info("Telegram bot started...")
-
-    # Start Flask asynchronously with Hypercorn
-    config = Config()
     port = int(os.environ.get("PORT", 5000))
+    config = Config()
     config.bind = [f"0.0.0.0:{port}"]
     flask_task = asyncio.create_task(serve(app, config))
-    logger.info(f"Flask server started on port {port}...")
 
-    # Keep both running
+    logger.info("Telegram bot and Flask server started...")
     await asyncio.gather(bot_task, flask_task)
 
 # --------------------------
-# Run everything
+# Run everything safely
 # --------------------------
 if __name__ == "__main__":
     try:
         logger.info("Starting Bot & Flask server...")
-        asyncio.run(main())
+        try:
+            # Check if an event loop is already running (Render-friendly)
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Use existing loop
+            asyncio.create_task(main())
+        else:
+            # Safe to create new loop
+            asyncio.run(main())
+
     except Exception as e:
         logger.exception(f"Fatal error: {e}")
