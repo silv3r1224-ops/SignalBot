@@ -49,41 +49,34 @@ if not TELEGRAM_TOKEN:
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 async def start(update, context):
-    try:
-        await update.message.reply_text("Hello! Bot is running ✅")
-        logger.info(f"/start used by {update.effective_user.username}")
-    except Exception as e:
-        logger.error(f"Error in /start handler: {e}")
+    await update.message.reply_text("Hello! Bot is running ✅")
+    logger.info(f"/start used by {update.effective_user.username}")
 
 async def echo(update, context):
-    try:
-        await update.message.reply_text(f"You said: {update.message.text}")
-        logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
-    except Exception as e:
-        logger.error(f"Error in echo handler: {e}")
+    await update.message.reply_text(f"You said: {update.message.text}")
+    logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
-# Main function to run bot + Flask
+# Run both Telegram and Flask together
 # --------------------------
 async def main():
-    # Start Telegram polling
-    telegram_task = asyncio.create_task(telegram_app.run_polling())
+    # Start Telegram polling in the background
+    asyncio.create_task(telegram_app.run_polling(close_loop=False))
 
-    # Start Flask using Hypercorn (async-friendly)
-    import hypercorn.asyncio
+    # Start Flask asynchronously with Hypercorn
+    from hypercorn.asyncio import serve
     from hypercorn.config import Config
 
     config = Config()
     config.bind = [f"0.0.0.0:{os.environ.get('PORT', 5000)}"]
+    await serve(app, config)
 
-    await hypercorn.asyncio.serve(app, config)
-
-    # Wait for telegram to finish (never)
-    await telegram_task
-
-if __name__ == "__main__":
-    logger.info("Bot and Flask server starting...")
-    asyncio.run(main())
+# --------------------------
+# Start event loop manually (Render-friendly)
+# --------------------------
+loop = asyncio.get_event_loop()
+logger.info("Bot and Flask server starting...")
+loop.run_until_complete(main())
