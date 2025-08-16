@@ -2,11 +2,10 @@ import os
 import logging
 import asyncio
 from flask import Flask, request, jsonify
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update
 
-# --------------------------
-# Logging setup
-# --------------------------
+# ===================== Logging Setup =====================
 LOG_FILE = "bot.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -18,30 +17,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------
-# Flask setup
-# --------------------------
+# ===================== Flask Setup =====================
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     logger.info("Home route accessed")
-    return "Bot & Server Running!"
+    return "Bot & Server Running ✅", 200
 
-@app.route('/razorpay-webhook', methods=['POST'])
+@app.route("/razorpay-webhook", methods=["POST"])
 def razorpay_webhook():
     try:
         data = request.json
-        logger.info(f"Webhook received: {data}")
-        # Add Razorpay signature verification if needed
+        logger.info(f"Razorpay webhook received: {data}")
+        # Add Razorpay signature verification here if needed
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return jsonify({"status": "error"}), 500
 
-# --------------------------
-# Telegram Bot setup
-# --------------------------
+# ===================== Telegram Bot Setup =====================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     logger.error("TELEGRAM_TOKEN environment variable not set!")
@@ -49,28 +44,35 @@ if not TELEGRAM_TOKEN:
 
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# Example command handler
-async def start(update, context):
+# ----- Command Handlers -----
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("Hello! Bot is running ✅")
         logger.info(f"/start used by {update.effective_user.username}")
     except Exception as e:
         logger.error(f"Error in /start handler: {e}")
 
-# Example message handler
-async def echo(update, context):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text("This bot is live and ready to help!")
+        logger.info(f"/help used by {update.effective_user.username}")
+    except Exception as e:
+        logger.error(f"Error in /help handler: {e}")
+
+# ----- Message Handler -----
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(f"You said: {update.message.text}")
         logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
     except Exception as e:
         logger.error(f"Error in echo handler: {e}")
 
+# Add handlers
 telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("help", help_command))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-# --------------------------
-# Safe polling with auto-restart
-# --------------------------
+# ===================== Safe Polling =====================
 async def run_telegram():
     while True:
         try:
@@ -81,14 +83,12 @@ async def run_telegram():
             logger.info("Restarting Telegram polling in 5s...")
             await asyncio.sleep(5)
 
-# --------------------------
-# Main function to run bot + server
-# --------------------------
+# ===================== Main Function =====================
 if __name__ == "__main__":
     async def main():
-        # Run Telegram bot in background
+        # Start Telegram bot in background
         asyncio.create_task(run_telegram())
-        # Run Flask server
+        # Run Flask server in main thread
         port = int(os.environ.get("PORT", 5000))
         logger.info(f"Starting Flask server on port {port}")
         app.run(host="0.0.0.0", port=port)
