@@ -7,8 +7,11 @@ from flask import Flask, request, abort
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import razorpay
+from dotenv import load_dotenv
 
 # Load environment variables
+load_dotenv()
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
@@ -27,20 +30,23 @@ subscribers = set()
 # Telegram Bot
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# Function to create Razorpay payment link for a user
+# Function to create Razorpay payment link
 def create_payment_link(user_id):
-    order_data = {
+    data = {
         "amount": 10000,  # ₹100
         "currency": "INR",
-        "receipt": f"user_{user_id}",
-        "payment_capture": 1,
-        "notes": {"telegram_id": str(user_id)}
+        "accept_partial": False,
+        "description": "Trading Signals Subscription",
+        "customer": {"name": f"User {user_id}", "contact": ""},
+        "notify": {"sms": False, "email": False},
+        "notes": {"telegram_id": str(user_id)},
+        "callback_url": "https://YOUR_DOMAIN/razorpay_webhook",
+        "callback_method": "post"
     }
-    order = razorpay_client.order.create(data=order_data)
-    payment_link = f"https://checkout.razorpay.com/v1/checkout.js?order_id={order['id']}"
-    return payment_link
+    payment_link = razorpay_client.payment_link.create(data)
+    return payment_link["short_url"]
 
-# Telegram command: start
+# Telegram /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in subscribers:
@@ -54,7 +60,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 telegram_app.add_handler(CommandHandler("start", start))
 
-# Run Telegram in separate thread
+# Run Telegram bot in a thread
 def run_telegram():
     telegram_app.run_polling()
 
@@ -63,23 +69,21 @@ def run_telegram():
 def razorpay_webhook():
     payload = request.data
     signature = request.headers.get("X-Razorpay-Signature")
-    
-    # Verify webhook
-    if not signature or not hmac.new(
-        bytes(RAZORPAY_WEBHOOK_SECRET, 'utf-8'),
-        msg=payload,
-        digestmod=hashlib.sha256
-    ).hexdigest() == signature:
+
+    # Verify webhook signature
+    if not signature or not hmac.compare_digest(
+        hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), payload, hashlib.sha256).hexdigest(),
+        signature
+    ):
         abort(400, "Invalid signature")
-    
+
     data = json.loads(payload)
     event = data.get("event")
-    
-    if event == "payment.captured":
-        payment_entity = data["payload"]["payment"]["entity"]
-        notes = payment_entity.get("notes", {})
+
+    if event == "payment_link.paid" or event == "payment.captured":
+        notes = data.get("payload", {}).get("payment", {}).get("entity", {}).get("notes", {})
         telegram_user_id = int(notes.get("telegram_id", 0))
-        
+
         if telegram_user_id:
             subscribers.add(telegram_user_id)
             # Notify user
@@ -92,7 +96,7 @@ def razorpay_webhook():
                 chat_id=ADMIN_ID,
                 text=f"User {telegram_user_id} just subscribed."
             )
-    
+
     return {"status": "ok"}
 
 # Run Flask
