@@ -1,23 +1,17 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey
-from sqlalchemy.orm import relationship
-from db import Base
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, unique=True, index=True)
-    name = Column(String)
-    subscribed = Column(Boolean, default=False)
-    plan = Column(String, nullable=True)
+db = SQLAlchemy()
 
-    payments = relationship("Payment", back_populates="user")
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    telegram_id = db.Column(db.String(100), unique=True, nullable=False)
+    is_premium = db.Column(db.Boolean, default=False)
+    subscription_end = db.Column(db.DateTime, nullable=True)
 
-class Payment(Base):
-    __tablename__ = "payments"
-    id = Column(Integer, primary_key=True, index=True)
-    razorpay_payment_id = Column(String, unique=True)
-    amount = Column(Float)
-    status = Column(String)
-    user_id = Column(Integer, ForeignKey("users.id"))
-
-    user = relationship("User", back_populates="payments")
+class Payment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    razorpay_payment_id = db.Column(db.String(200), nullable=False)
+    status = db.Column(db.String(50), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
