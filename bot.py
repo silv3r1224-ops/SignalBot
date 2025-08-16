@@ -1,5 +1,5 @@
 import logging
-import asyncio
+import threading
 from flask import Flask, request, jsonify
 import razorpay
 from telegram.ext import Application, CommandHandler
@@ -9,9 +9,7 @@ from models import Payment
 
 logging.basicConfig(level=logging.INFO)
 
-# =========================
 # Flask app
-# =========================
 app = Flask(__name__)
 
 # Razorpay client
@@ -21,16 +19,16 @@ razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 async def start(update, context):
     await update.message.reply_text("Welcome! Bot is working ✅")
 
-# Build bot
-def build_bot():
+def run_bot():
+    """Run the Telegram bot in a separate thread."""
     Base.metadata.create_all(bind=engine)
-    app_bot = Application.builder().token(BOT_TOKEN).build()
-    app_bot.add_handler(CommandHandler("start", start))
-    return app_bot
 
-# =========================
-# Razorpay order endpoint
-# =========================
+    bot_app = Application.builder().token(BOT_TOKEN).build()
+    bot_app.add_handler(CommandHandler("start", start))
+
+    bot_app.run_polling()
+
+# Razorpay order
 @app.route("/create_order", methods=["POST"])
 def create_order():
     data = request.json
@@ -45,7 +43,7 @@ def create_order():
     db = SessionLocal()
     new_payment = Payment(
         user_id=data.get("user_id", "unknown"),
-        amount=amount/100,
+        amount=amount / 100,
         order_id=order["id"],
         status="created"
     )
@@ -55,9 +53,7 @@ def create_order():
 
     return jsonify(order)
 
-# =========================
-# Razorpay webhook endpoint
-# =========================
+# Razorpay webhook
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -78,21 +74,9 @@ def webhook():
 def home():
     return "Flask server alive ✅ and Bot running 🚀"
 
-# =========================
-# Main async runner
-# =========================
-async def main():
-    bot_app = build_bot()
-
-    from hypercorn.asyncio import serve
-    from hypercorn.config import Config
-    config = Config()
-    config.bind = ["0.0.0.0:5000"]
-
-    await asyncio.gather(
-        bot_app.run_polling(),   # Telegram bot
-        serve(app, config)       # Flask API with Hypercorn
-    )
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Run Telegram bot in separate thread
+    threading.Thread(target=run_bot, daemon=True).start()
+
+    # Run Flask app (main thread)
+    app.run(host="0.0.0.0", port=5000)
