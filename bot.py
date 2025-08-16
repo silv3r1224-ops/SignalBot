@@ -33,6 +33,7 @@ def razorpay_webhook():
     try:
         data = request.json
         logger.info(f"Webhook received: {data}")
+        # Add Razorpay signature verification if needed
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -48,35 +49,55 @@ if not TELEGRAM_TOKEN:
 
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# Handlers
+# Command handlers
 async def start(update, context):
-    await update.message.reply_text("Hello! Bot is running ✅")
-    logger.info(f"/start used by {update.effective_user.username}")
+    try:
+        await update.message.reply_text("Hello! Bot is running ✅")
+        logger.info(f"/start used by {update.effective_user.username}")
+    except Exception as e:
+        logger.error(f"Error in /start handler: {e}")
 
 async def echo(update, context):
-    await update.message.reply_text(f"You said: {update.message.text}")
-    logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
+    try:
+        await update.message.reply_text(f"You said: {update.message.text}")
+        logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
+    except Exception as e:
+        logger.error(f"Error in echo handler: {e}")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
-# Run Telegram safely
+# Safe Telegram polling
 # --------------------------
 async def run_telegram():
-    await telegram_app.initialize()
-    await telegram_app.start()
-    logger.info("Telegram bot started")
-    # Keep bot running
-    await telegram_app.updater.start_polling()
-    await telegram_app.updater.idle()
+    while True:
+        try:
+            logger.info("Starting Telegram polling...")
+            await telegram_app.run_polling()
+        except Exception as e:
+            logger.error(f"Telegram polling crashed: {e}")
+            logger.info("Restarting Telegram polling in 5s...")
+            await asyncio.sleep(5)
 
 # --------------------------
-# Run Flask + Telegram
+# Main function to run bot + Flask
 # --------------------------
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+def main():
+    # Create a new event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # Start Telegram polling in background
     loop.create_task(run_telegram())
+    # Start Flask server in same process
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting Flask server on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    # Use asyncio.to_thread to run blocking Flask in the async loop
+    asyncio.to_thread(app.run, "0.0.0.0", port)
+
+    # Keep loop running forever
+    loop.run_forever()
+
+if __name__ == "__main__":
+    logger.info("Bot and Flask server starting...")
+    main()
