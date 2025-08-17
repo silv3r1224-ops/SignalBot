@@ -1,14 +1,6 @@
-Flask==2.3.3
-python-telegram-bot==20.3
-python-dotenv==1.0.0
-razorpay==1.4.1
-requests==2.32.4
-setuptools>=75.1.0
-SQLAlchemy==1.4.51
-psycopg2-binary==2.9.9
+Werkzeug==2.3.7
 quart==0.18.3
 hypercorn==0.17.3
-Werkzeug<3.1
 aiofiles==24.1.0
 blinker==1.9.0
 h11==0.14.0
@@ -30,3 +22,11 @@ greenlet==3.2.4
 click==8.2.1
 charset_normalizer==3.4.3
 certifi==2025.8.3
+SQLAlchemy==1.4.51
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+python-telegram-bot==20.3
+razorpay==1.4.1
+requests==2.32.4
+Flask==2.3.3
+setuptools>=75.1.0
