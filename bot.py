@@ -26,8 +26,9 @@ RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 PORT = int(os.environ.get("PORT", 5000))
+BASE_URL = os.environ.get("BASE_URL")  # e.g., https://signalbot-tfnb.onrender.com
 
-if not all([TELEGRAM_TOKEN, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, WEBHOOK_SECRET, ADMIN_ID]):
+if not all([TELEGRAM_TOKEN, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, WEBHOOK_SECRET, ADMIN_ID, BASE_URL]):
     raise RuntimeError("Missing one or more environment variables!")
 
 # --------------------------
@@ -111,7 +112,6 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "payment_capture": 1,
             "notes": {"user_id": str(user_id)}
         })
-        # Use Razorpay checkout URL
         payment_url = f"https://checkout.razorpay.com/v1/checkout.js?order_id={order['id']}"
         await update.message.reply_text(
             f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\nPay Now: {payment_url}"
@@ -121,28 +121,34 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error creating payment: {e}")
         logger.error(f"/pay error: {e}")
 
-# Handlers
+# Add handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("pay", pay))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
+# Telegram webhook route
+# --------------------------
+@app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
+async def telegram_webhook():
+    update = Update.de_json(await request.get_json(), telegram_app.bot)
+    await telegram_app.update_queue.put(update)
+    return "ok", 200
+
+# --------------------------
 # Main asyncio loop
 # --------------------------
 async def main():
+    # Initialize bot (do NOT start polling)
     await telegram_app.initialize()
-    await telegram_app.start()
-    logger.info("Telegram bot started")
-    
-    # Start Quart app
-    quart_task = asyncio.create_task(app.run_task(host="0.0.0.0", port=PORT))
-    
-    try:
-        await quart_task
-    finally:
-        await telegram_app.stop()
-        await telegram_app.shutdown()
-        logger.info("Telegram bot stopped")
+
+    # Set webhook
+    webhook_url = f"{BASE_URL}/{TELEGRAM_TOKEN}"
+    await telegram_app.bot.set_webhook(webhook_url)
+    logger.info(f"Webhook set to: {webhook_url}")
+
+    # Start Quart server
+    await app.run_task(host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
     asyncio.run(main())
