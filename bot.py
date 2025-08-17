@@ -53,15 +53,18 @@ async def razorpay_webhook():
         logger.info(f"Webhook received: {payload}")
 
         if payload.get("event") == "payment.captured":
-            order_id = payload['payload']['payment']['entity']['order_id']
-            amount = payload['payload']['payment']['entity']['amount'] / 100
-            user_id = payload['payload']['payment']['entity'].get('notes', {}).get('user_id')
+            payment_entity = payload['payload']['payment']['entity']
+            order_id = payment_entity['order_id']
+            amount = payment_entity['amount'] / 100
+            user_id = payment_entity.get('notes', {}).get('user_id')
 
             if user_id:
                 await telegram_app.bot.send_message(chat_id=int(user_id), text=f"✅ Payment of ₹{amount} received!")
 
-            await telegram_app.bot.send_message(chat_id=ADMIN_ID,
-                text=f"💰 Payment captured!\nOrder ID: {order_id}\nAmount: ₹{amount}\nUser ID: {user_id}")
+            await telegram_app.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"💰 Payment captured!\nOrder ID: {order_id}\nAmount: ₹{amount}\nUser ID: {user_id}"
+            )
 
         return jsonify({"status": "ok"}), 200
     except Exception as e:
@@ -102,12 +105,15 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "notes": {"user_id": str(user_id)}
         })
         payment_url = f"https://rzp.io/i/{order['id']}"
-        await update.message.reply_text(f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\nPay Now: {payment_url}")
+        await update.message.reply_text(
+            f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\nPay Now: {payment_url}"
+        )
         logger.info(f"Payment created for {user_id}: {order}")
     except Exception as e:
         await update.message.reply_text(f"Error creating payment: {e}")
         logger.error(f"/pay error: {e}")
 
+# Add handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 telegram_app.add_handler(CommandHandler("pay", pay))
@@ -116,10 +122,21 @@ telegram_app.add_handler(CommandHandler("pay", pay))
 # Main asyncio loop
 # --------------------------
 async def main():
-    bot_task = asyncio.create_task(telegram_app.run_polling())
-    # Quart is fully async, just run it in another task
+    # Initialize and start the Telegram bot
+    await telegram_app.initialize()
+    await telegram_app.start()
+    logger.info("Telegram bot started")
+
+    # Start Quart server
     quart_task = asyncio.create_task(app.run_task(host="0.0.0.0", port=PORT))
-    await asyncio.gather(bot_task, quart_task)
+
+    try:
+        await quart_task
+    finally:
+        # Proper shutdown of Telegram bot
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+        logger.info("Telegram bot stopped")
 
 if __name__ == "__main__":
     asyncio.run(main())
