@@ -23,7 +23,7 @@ load_dotenv()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")  # Make sure no '#' in .env
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 PORT = int(os.environ.get("PORT", 5000))
 BASE_URL = os.environ.get("BASE_URL")  # e.g., https://signalbot-tfnb.onrender.com
@@ -47,6 +47,9 @@ async def home():
     logger.info("Home route accessed")
     return "Bot & Server Running!"
 
+# --------------------------
+# Razorpay Webhook
+# --------------------------
 @app.route('/razorpay-webhook', methods=['POST'])
 async def razorpay_webhook():
     data = await request.data
@@ -127,9 +130,9 @@ telegram_app.add_handler(CommandHandler("pay", pay))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
-# Telegram webhook route
+# Telegram webhook route using WEBHOOK_SECRET
 # --------------------------
-@app.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
+@app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 async def telegram_webhook():
     update = Update.de_json(await request.get_json(), telegram_app.bot)
     await telegram_app.update_queue.put(update)
@@ -143,7 +146,7 @@ async def main():
     await telegram_app.initialize()
 
     # Set webhook
-    webhook_url = f"{BASE_URL}/{TELEGRAM_TOKEN}"
+    webhook_url = "https://signalbot-tfnb.onrender.com/Tesan25"
     await telegram_app.bot.set_webhook(webhook_url)
     logger.info(f"Webhook set to: {webhook_url}")
 
