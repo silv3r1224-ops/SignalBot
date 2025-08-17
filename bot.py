@@ -1,16 +1,23 @@
 import os
 import logging
-from quart import Quart, request, jsonify
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from dotenv import load_dotenv
-import razorpay
 import hmac
 import hashlib
 import asyncio
+from dotenv import load_dotenv
+
+from quart import Quart, request, jsonify
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+import razorpay
 
 # --------------------------
-# Environment variables
+# Load environment variables
 # --------------------------
 load_dotenv()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -30,7 +37,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --------------------------
-# Quart app
+# Quart App
 # --------------------------
 app = Quart(__name__)
 
@@ -44,8 +51,8 @@ async def razorpay_webhook():
     data = await request.data
     signature = request.headers.get('X-Razorpay-Signature')
     try:
-        hmac_sha256 = hmac.new(bytes(WEBHOOK_SECRET, 'utf-8'), msg=data, digestmod=hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(hmac_sha256, signature):
+        computed_hmac = hmac.new(bytes(WEBHOOK_SECRET, 'utf-8'), msg=data, digestmod=hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(computed_hmac, signature):
             logger.warning("Invalid webhook signature")
             return jsonify({"status": "invalid signature"}), 400
 
@@ -53,10 +60,10 @@ async def razorpay_webhook():
         logger.info(f"Webhook received: {payload}")
 
         if payload.get("event") == "payment.captured":
-            payment_entity = payload['payload']['payment']['entity']
-            order_id = payment_entity['order_id']
-            amount = payment_entity['amount'] / 100
-            user_id = payment_entity.get('notes', {}).get('user_id')
+            payment = payload['payload']['payment']['entity']
+            order_id = payment['order_id']
+            amount = payment['amount'] / 100
+            user_id = payment.get('notes', {}).get('user_id')
 
             if user_id:
                 await telegram_app.bot.send_message(chat_id=int(user_id), text=f"✅ Payment of ₹{amount} received!")
@@ -104,7 +111,8 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "payment_capture": 1,
             "notes": {"user_id": str(user_id)}
         })
-        payment_url = f"https://rzp.io/i/{order['id']}"
+        # Use Razorpay checkout URL
+        payment_url = f"https://checkout.razorpay.com/v1/checkout.js?order_id={order['id']}"
         await update.message.reply_text(
             f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\nPay Now: {payment_url}"
         )
@@ -113,27 +121,25 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error creating payment: {e}")
         logger.error(f"/pay error: {e}")
 
-# Add handlers
+# Handlers
 telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 telegram_app.add_handler(CommandHandler("pay", pay))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
 # Main asyncio loop
 # --------------------------
 async def main():
-    # Initialize and start the Telegram bot
     await telegram_app.initialize()
     await telegram_app.start()
     logger.info("Telegram bot started")
-
-    # Start Quart server
+    
+    # Start Quart app
     quart_task = asyncio.create_task(app.run_task(host="0.0.0.0", port=PORT))
-
+    
     try:
         await quart_task
     finally:
-        # Proper shutdown of Telegram bot
         await telegram_app.stop()
         await telegram_app.shutdown()
         logger.info("Telegram bot stopped")
