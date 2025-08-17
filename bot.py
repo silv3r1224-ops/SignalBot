@@ -4,7 +4,6 @@ from flask import Flask, request, jsonify
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from dotenv import load_dotenv
 import razorpay
-from threading import Thread
 import hmac
 import hashlib
 import asyncio
@@ -47,7 +46,6 @@ def razorpay_webhook():
     data = request.data
     signature = request.headers.get('X-Razorpay-Signature')
     try:
-        # Verify webhook signature
         hmac_sha256 = hmac.new(
             bytes(WEBHOOK_SECRET, 'utf-8'),
             msg=data,
@@ -58,7 +56,6 @@ def razorpay_webhook():
             payload = request.json
             logger.info(f"Valid webhook received: {payload}")
 
-            # Check payment status
             if payload.get("event") == "payment.captured":
                 order_id = payload['payload']['payment']['entity']['order_id']
                 amount = payload['payload']['payment']['entity']['amount'] / 100
@@ -66,21 +63,19 @@ def razorpay_webhook():
 
                 # Notify user if user_id exists
                 if user_id:
-                    asyncio.run_coroutine_threadsafe(
+                    asyncio.create_task(
                         telegram_app.bot.send_message(
                             chat_id=int(user_id),
                             text=f"✅ Payment of ₹{amount} received successfully!"
-                        ),
-                        telegram_app.loop
+                        )
                     )
 
                 # Notify admin
-                asyncio.run_coroutine_threadsafe(
+                asyncio.create_task(
                     telegram_app.bot.send_message(
                         chat_id=ADMIN_ID,
                         text=f"💰 Payment captured!\nOrder ID: {order_id}\nAmount: ₹{amount}\nUser ID: {user_id}"
-                    ),
-                    telegram_app.loop
+                    )
                 )
 
             return jsonify({"status": "ok"}), 200
@@ -109,9 +104,6 @@ async def echo(update, context):
     await update.message.reply_text(f"You said: {update.message.text}")
     logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
 
-# --------------------------
-# /pay command
-# --------------------------
 async def pay(update, context):
     user_id = update.effective_user.id
     if len(context.args) != 2:
@@ -119,10 +111,9 @@ async def pay(update, context):
         return
 
     try:
-        amount = int(float(context.args[0]) * 100)  # Convert to paise
+        amount = int(float(context.args[0]) * 100)
         description = context.args[1]
 
-        # Create Razorpay order with user_id in notes
         order = razor_client.order.create({
             "amount": amount,
             "currency": "INR",
@@ -131,7 +122,6 @@ async def pay(update, context):
             "notes": {"user_id": str(user_id)}
         })
 
-        # Reply with payment link
         payment_url = f"https://checkout.razorpay.com/v1/checkout.js?order_id={order['id']}"
         await update.message.reply_text(
             f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\n[Pay Now]({payment_url})",
@@ -147,16 +137,17 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 telegram_app.add_handler(CommandHandler("pay", pay))
 
 # --------------------------
-# Run Telegram bot in a thread
+# Run both Flask & Telegram in asyncio
 # --------------------------
-def run_bot():
-    telegram_app.run_polling()
+async def main():
+    # Run Telegram bot
+    bot_task = asyncio.create_task(telegram_app.run_polling())
 
-bot_thread = Thread(target=run_bot)
-bot_thread.start()
+    # Run Flask in executor
+    loop = asyncio.get_running_loop()
+    flask_task = loop.run_in_executor(None, lambda: app.run(host="0.0.0.0", port=PORT))
 
-# --------------------------
-# Run Flask normally
-# --------------------------
+    await asyncio.gather(bot_task, flask_task)
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    asyncio.run(main())
