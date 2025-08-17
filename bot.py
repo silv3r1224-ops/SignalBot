@@ -1,76 +1,122 @@
 import os
 import logging
-from flask import Flask, request
+import hmac
+import hashlib
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+import razorpay
+import asyncio
 
 # --------------------------
-# Logging setup
+# Load .env
 # --------------------------
-logging.basicConfig(level=logging.INFO)
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+RAZORPAY_KEY = os.getenv("RAZORPAY_KEY")
+RAZORPAY_SECRET = os.getenv("RAZORPAY_SECRET")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
+PORT = int(os.getenv("PORT", 5000))
+
+# --------------------------
+# Logging
+# --------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # --------------------------
-# Flask setup
+# Razorpay client
+# --------------------------
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY, RAZORPAY_SECRET))
+
+# --------------------------
+# Flask app
 # --------------------------
 app = Flask(__name__)
 
-@app.route("/")
+@app.route('/')
 def home():
     logger.info("Home route accessed")
     return "Bot & Server Running!"
 
-# --------------------------
-# Telegram bot setup
-# --------------------------
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN environment variable not set!")
+@app.route('/razorpay-webhook', methods=['POST'])
+def razorpay_webhook():
+    data = request.data
+    signature = request.headers.get('X-Razorpay-Signature', '')
 
+    generated_signature = hmac.new(
+        bytes(RAZORPAY_WEBHOOK_SECRET, 'utf-8'),
+        msg=data,
+        digestmod=hashlib.sha256
+    ).hexdigest()
+
+    if hmac.compare_digest(generated_signature, signature):
+        logger.info(f"Verified webhook: {request.json}")
+        # Notify admin
+        asyncio.create_task(telegram_app.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"Payment received: {request.json}"
+        ))
+        return jsonify({"status": "ok"}), 200
+    else:
+        logger.warning("Invalid webhook signature")
+        return jsonify({"status": "error", "message": "Invalid signature"}), 400
+
+# --------------------------
+# Telegram bot
+# --------------------------
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-bot = telegram_app.bot  # Needed for webhook handling
 
-# --------------------------
-# Bot commands
-# --------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hello! Bot is running ✅")
-    logger.info(f"/start used by {update.effective_user.username}")
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"You said: {update.message.text}")
-    logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
+
+async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    amount = 10000  # in paise (₹100)
+    currency = "INR"
+    
+    # Create Razorpay order
+    order = razorpay_client.order.create({
+        "amount": amount,
+        "currency": currency,
+        "payment_capture": 1
+    })
+    
+    await update.message.reply_text(
+        f"Please pay ₹{amount/100} using Razorpay.\n"
+        f"Order ID: {order['id']}\n"
+        f"Use your frontend/payment page to complete payment.\n"
+        f"Webhook will verify automatically."
+    )
 
 telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("pay", pay))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 # --------------------------
-# Webhook route
+# Main async
 # --------------------------
-@app.route(f"/webhook/{TELEGRAM_TOKEN}", methods=["POST"])
-def webhook():
-    """Receive updates from Telegram via webhook"""
-    update = Update.de_json(request.get_json(), bot)
-    telegram_app.update_queue.put_nowait(update)
-    return "ok", 200
+async def main():
+    await telegram_app.initialize()
+    await telegram_app.start()
+    logger.info("Telegram bot started")
+    
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    config = Config()
+    config.bind = [f"0.0.0.0:{PORT}"]
+    await serve(app, config)
 
-# --------------------------
-# Set webhook on startup
-# --------------------------
-async def set_webhook():
-    webhook_url = f"{os.environ.get('RENDER_EXTERNAL_URL')}/webhook/{TELEGRAM_TOKEN}"
-    await telegram_app.bot.set_webhook(webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
+    await telegram_app.stop()
+    await telegram_app.shutdown()
 
-# --------------------------
-# Run Flask & bot
-# --------------------------
 if __name__ == "__main__":
-    import asyncio
-
-    # Set webhook first
-    asyncio.run(set_webhook())
-
-    # Run Flask server
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    asyncio.run(main())
