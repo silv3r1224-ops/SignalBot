@@ -1,11 +1,13 @@
 import os
 import logging
 from flask import Flask, request, jsonify
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from dotenv import load_dotenv
 import razorpay
 import hmac
 import hashlib
+from threading import Thread
 import asyncio
 
 # --------------------------
@@ -96,23 +98,23 @@ razor_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 # --------------------------
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-async def start(update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hello! Bot is running ✅")
     logger.info(f"/start used by {update.effective_user.username}")
 
-async def echo(update, context):
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"You said: {update.message.text}")
     logger.info(f"Message from {update.effective_user.username}: {update.message.text}")
 
-async def pay(update, context):
+async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if len(context.args) != 2:
+    if len(context.args) < 2:
         await update.message.reply_text("Usage: /pay <amount_in_rupees> <description>")
         return
 
     try:
         amount = int(float(context.args[0]) * 100)
-        description = context.args[1]
+        description = " ".join(context.args[1:])
 
         order = razor_client.order.create({
             "amount": amount,
@@ -122,10 +124,9 @@ async def pay(update, context):
             "notes": {"user_id": str(user_id)}
         })
 
-        payment_url = f"https://checkout.razorpay.com/v1/checkout.js?order_id={order['id']}"
+        payment_url = f"https://rzp.io/i/{order['id']}"  # user-friendly link
         await update.message.reply_text(
-            f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\n[Pay Now]({payment_url})",
-            parse_mode="Markdown"
+            f"Payment order created!\nAmount: ₹{amount/100}\nDescription: {description}\nPay Now: {payment_url}"
         )
         logger.info(f"Payment created for {user_id}: {order}")
     except Exception as e:
@@ -137,17 +138,16 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 telegram_app.add_handler(CommandHandler("pay", pay))
 
 # --------------------------
-# Run both Flask & Telegram in asyncio
+# Run Telegram bot in thread
 # --------------------------
-async def main():
-    # Run Telegram bot
-    bot_task = asyncio.create_task(telegram_app.run_polling())
+def run_bot():
+    telegram_app.run_polling()
 
-    # Run Flask in executor
-    loop = asyncio.get_running_loop()
-    flask_task = loop.run_in_executor(None, lambda: app.run(host="0.0.0.0", port=PORT))
+bot_thread = Thread(target=run_bot, daemon=True)
+bot_thread.start()
 
-    await asyncio.gather(bot_task, flask_task)
-
+# --------------------------
+# Run Flask normally
+# --------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run(host="0.0.0.0", port=PORT)
